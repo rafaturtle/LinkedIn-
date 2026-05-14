@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -17,13 +16,11 @@ OUT_DIR = ROOT / "out" / "infographics"
 
 CANVAS = 1080
 MARGIN = 80
-BAR_WIDTH = 28
 
 # Roima brand colors
 ROIMA_GREEN = "#46B03B"
 GRAY_900 = "#212121"
 GRAY_600 = "#757575"
-GRAY_100 = "#F5F5F5"
 WHITE = "#FFFFFF"
 
 THEME_COLOR = {
@@ -49,24 +46,6 @@ def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
-def format_date(iso: str) -> str:
-    d = date.fromisoformat(iso)
-    return d.strftime("%b %d, %Y").replace(" 0", " ")
-
-
-def draw_pill(draw: ImageDraw.ImageDraw, x: int, y: int, text: str,
-              fill: str, text_color: str = WHITE) -> int:
-    pad_x, pad_y = 22, 12
-    f = font(26, bold=True)
-    text_w = draw.textlength(text, font=f)
-    text_h = 26
-    w = int(text_w + pad_x * 2)
-    h = text_h + pad_y * 2
-    draw.rounded_rectangle((x, y, x + w, y + h), radius=h // 2, fill=fill)
-    draw.text((x + pad_x, y + pad_y - 4), text, fill=text_color, font=f)
-    return w
-
-
 def wrap_text(draw: ImageDraw.ImageDraw, text: str, f: ImageFont.FreeTypeFont,
               max_width: int) -> list[str]:
     lines: list[str] = []
@@ -90,23 +69,17 @@ def render(post: dict) -> Path:
     draw = ImageDraw.Draw(img)
 
     theme_color = THEME_COLOR.get(post["theme"], ROIMA_GREEN)
+    content_max_w = CANVAS - 2 * MARGIN
 
-    # Left Roima-green bar
-    draw.rectangle((0, 0, BAR_WIDTH, CANVAS), fill=ROIMA_GREEN)
-
-    # Top wordmark
-    wordmark_f = font(28, bold=True)
-    draw.text((MARGIN, MARGIN), "ROIMA", fill=GRAY_900, font=wordmark_f)
-
-    # Theme pill (top right)
+    # Theme pill (top left)
     pill_text = post["theme"].upper()
-    pill_f = font(22, bold=True)
+    pill_f = font(24, bold=True)
     pill_text_w = draw.textlength(pill_text, font=pill_f)
-    pill_pad_x, pill_pad_y = 20, 10
+    pill_pad_x, pill_pad_y = 22, 12
     pill_w = int(pill_text_w + pill_pad_x * 2)
-    pill_h = 22 + pill_pad_y * 2
-    pill_x = CANVAS - MARGIN - pill_w
-    pill_y = MARGIN - 6
+    pill_h = 24 + pill_pad_y * 2
+    pill_x = MARGIN
+    pill_y = MARGIN
     draw.rounded_rectangle(
         (pill_x, pill_y, pill_x + pill_w, pill_y + pill_h),
         radius=pill_h // 2,
@@ -119,64 +92,49 @@ def render(post: dict) -> Path:
         font=pill_f,
     )
 
-    # Big post number, theme-colored
-    num_f = font(180, bold=True)
-    num_y = MARGIN + 80
-    draw.text((MARGIN, num_y), post["number"], fill=theme_color, font=num_f)
-
-    # Accent rule under number
-    rule_y = num_y + 200
-    draw.rectangle((MARGIN, rule_y, MARGIN + 120, rule_y + 6), fill=theme_color)
-
-    # Hook top (smaller, label-like)
-    top_f = font(38, bold=False)
-    top_y = rule_y + 36
-    top_lines = wrap_text(draw, post["hook_top"], top_f, CANVAS - 2 * MARGIN)
-    for line in top_lines:
-        draw.text((MARGIN, top_y), line, fill=GRAY_600, font=top_f)
-        top_y += 50
-
-    # Hook bottom (the punch — bold, large)
-    bottom_size = 64
-    while bottom_size >= 40:
+    # Find the largest body size that fits comfortably (vertically centered)
+    top_size = 42
+    bottom_size = 72
+    while bottom_size >= 44:
+        top_f = font(top_size, bold=False)
         bottom_f = font(bottom_size, bold=True)
+        top_lines = wrap_text(draw, post["hook_top"], top_f, content_max_w)
         bottom_lines = wrap_text(
-            draw, post["hook_bottom"], bottom_f, CANVAS - 2 * MARGIN
+            draw, post["hook_bottom"], bottom_f, content_max_w
         )
-        line_h = int(bottom_size * 1.15)
-        block_h = len(bottom_lines) * line_h
-        # Reserve ~180 px at the bottom for footer
-        if top_y + block_h <= CANVAS - 200:
+        top_lh = int(top_size * 1.2)
+        bottom_lh = int(bottom_size * 1.15)
+        gap = 28
+        block_h = len(top_lines) * top_lh + gap + len(bottom_lines) * bottom_lh
+        if block_h <= CANVAS - 360:
             break
         bottom_size -= 4
+        top_size = max(36, top_size - 2)
 
-    by = top_y + 8
+    # Vertically center the block in the canvas
+    y = (CANVAS - block_h) // 2
+
+    for line in top_lines:
+        draw.text((MARGIN, y), line, fill=GRAY_600, font=top_f)
+        y += top_lh
+
+    y += gap - top_lh + int(top_size * 1.2)  # small adjustment after last top line
+
+    # Accent rule before the punch
+    rule_w = 100
+    rule_h = 6
+    draw.rectangle(
+        (MARGIN, y - gap // 2 - rule_h // 2,
+         MARGIN + rule_w, y - gap // 2 + rule_h // 2),
+        fill=theme_color,
+    )
+
     for line in bottom_lines:
-        draw.text((MARGIN, by), line, fill=GRAY_900, font=bottom_f)
-        by += int(bottom_size * 1.15)
-
-    # Footer: date (left) and post title (right, small)
-    footer_f = font(22, bold=False)
-    footer_title_f = font(22, bold=True)
-    footer_y = CANVAS - MARGIN - 22
-    draw.text(
-        (MARGIN, footer_y),
-        format_date(post["date"]),
-        fill=GRAY_600,
-        font=footer_f,
-    )
-
-    title_text = post["title"]
-    title_w = draw.textlength(title_text, font=footer_title_f)
-    draw.text(
-        (CANVAS - MARGIN - title_w, footer_y),
-        title_text,
-        fill=GRAY_900,
-        font=footer_title_f,
-    )
+        draw.text((MARGIN, y), line, fill=GRAY_900, font=bottom_f)
+        y += bottom_lh
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = OUT_DIR / f"{post['number']}-{slug(post['title'])}.png"
+    out_path = OUT_DIR / f"{slug(post['title'])}.png"
     img.save(out_path, "PNG", optimize=True)
     return out_path
 
