@@ -7,8 +7,8 @@ empty, then renders one 1080x1080 PNG per qualifying row into
 ``out/infographics/``.
 
 Required env:
-    NOTION_TOKEN — internal integration token with read access to the
-        Posts database.
+    NOTION_KEY (or NOTION_TOKEN) — internal integration token with read
+        access to the Posts database.
 
 Optional env:
     NOTION_POSTS_DATABASE_ID — defaults to the LinkedIn Content
@@ -215,14 +215,14 @@ def render(post: dict) -> Path:
 
 
 def main() -> int:
-    token = os.environ.get("NOTION_TOKEN")
+    token = os.environ.get("NOTION_KEY") or os.environ.get("NOTION_TOKEN")
     if not token:
         print(
-            "error: NOTION_TOKEN env var is not set.\n"
+            "error: NOTION_KEY env var is not set.\n"
             "  1. Create an internal integration: "
             "https://www.notion.so/profile/integrations\n"
             "  2. Share the LinkedIn Content Calendar > Posts database with it.\n"
-            "  3. export NOTION_TOKEN=<secret>",
+            "  3. export NOTION_KEY=<secret>",
             file=sys.stderr,
         )
         return 2
