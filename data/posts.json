@@ -1,0 +1,74 @@
+[
+  {
+    "id": "36030601-b0c0-819a-90a4-e47f00322cc1",
+    "number": "01",
+    "title": "The diagnosis problem",
+    "theme": "Diagnosis",
+    "hook_top": "Most manufacturers don't have",
+    "hook_bottom": "a digitization problem.\nThey have a diagnosis problem.",
+    "date": "2026-05-19"
+  },
+  {
+    "id": "36030601-b0c0-8128-b501-ff117ec864ff",
+    "number": "02",
+    "title": "Data is a byproduct",
+    "theme": "Data byproduct",
+    "hook_top": "Data shouldn't be the goal",
+    "hook_bottom": "of digital transformation.\nIt should be the byproduct.",
+    "date": "2026-05-21"
+  },
+  {
+    "id": "36030601-b0c0-81dd-b3e9-c676aad5e123",
+    "number": "03",
+    "title": "The 22% plateau",
+    "theme": "OEE plateau",
+    "hook_top": "22% OEE gain in 9 months.",
+    "hook_bottom": "Then it plateaued.\nHere's why.",
+    "date": "2026-05-26"
+  },
+  {
+    "id": "36030601-b0c0-810c-9306-dbdfee3d1317",
+    "number": "04",
+    "title": "The conductor",
+    "theme": "Orchestration",
+    "hook_top": "A conductor doesn't play",
+    "hook_bottom": "an instrument.\nBut without one, the orchestra is just noise.",
+    "date": "2026-05-28"
+  },
+  {
+    "id": "36030601-b0c0-81ab-bb22-cd7875bd02c0",
+    "number": "05",
+    "title": "Knowledge depreciates",
+    "theme": "Workforce",
+    "hook_top": "Your most valuable asset",
+    "hook_bottom": "just walked out the door.\nAnd you didn't have a system\nto keep what they knew.",
+    "date": "2026-06-02"
+  },
+  {
+    "id": "36030601-b0c0-81f8-855c-f1795483a9c6",
+    "number": "06",
+    "title": "The SME myth",
+    "theme": "SME myth",
+    "hook_top": "The biggest myth in manufacturing:",
+    "hook_bottom": "you have to be an industry giant\nto digitalize operations.",
+    "date": "2026-06-04"
+  },
+  {
+    "id": "36030601-b0c0-8108-845f-e090209d9bf9",
+    "number": "07",
+    "title": "200 steps",
+    "theme": "Quality",
+    "hook_top": "A standard batch of wine",
+    "hook_bottom": "has about 200 steps.\nEach one needs a person\nto do it right.",
+    "date": "2026-06-09"
+  },
+  {
+    "id": "36030601-b0c0-819c-8e2e-e1fe3dca2b86",
+    "number": "08",
+    "title": "You don't have to start with OEE",
+    "theme": "OEE rethink",
+    "hook_top": "You don't have to start",
+    "hook_bottom": "your digital journey with OEE.\nYou have options.\nEach one has consequences.",
+    "date": "2026-06-11"
+  }
+]
