@@ -1,23 +1,30 @@
 """Generate LinkedIn-post infographics for Notion pages that are approved
-and have no Image yet.
+and have no Image yet, then commit, push, and update Notion's Image
+field with the public raw GitHub URL.
 
 Notion is the source of truth: the script queries the Posts database for
 rows where ``Status == "Approved"`` and the ``Image`` file property is
-empty, then renders one 1080x1080 PNG per qualifying row into
-``out/infographics/``.
+empty, renders a 1080x1080 PNG per qualifying row into
+``out/infographics/``, commits and pushes the new files, and finally
+PATCHes each page so its ``Image`` field points at the new raw URL.
 
-Required env:
+Required env (or in a project-local .env file):
     NOTION_KEY (or NOTION_TOKEN) — internal integration token with read
-        access to the Posts database.
+        + update access to the Posts database.
 
 Optional env:
     NOTION_POSTS_DATABASE_ID — defaults to the LinkedIn Content
         Calendar's Posts database.
+    GITHUB_RAW_BASE — override the raw-content base URL. Defaults to
+        the current branch on origin.
+    SKIP_GIT — set to "1" to skip git add/commit/push (just generate
+        and update Notion).
 """
 from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -63,12 +70,51 @@ def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
-def query_approved_without_image(token: str, database_id: str) -> list[dict]:
-    headers = {
+def load_dotenv() -> None:
+    env_file = ROOT / ".env"
+    if not env_file.exists():
+        return
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def git(*args: str) -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(ROOT), *args], text=True
+    ).strip()
+
+
+def github_repo() -> str:
+    raw = git("remote", "get-url", "origin")
+    m = re.search(r"[:/]([^/:]+)/([^/:]+?)(?:\.git)?/?$", raw)
+    if not m:
+        raise RuntimeError(f"Could not parse owner/repo from remote URL: {raw!r}")
+    return f"{m.group(1)}/{m.group(2)}"
+
+
+def raw_url_for(filename: str) -> str:
+    override = os.environ.get("GITHUB_RAW_BASE")
+    if override:
+        base = override.rstrip("/")
+    else:
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        base = f"https://raw.githubusercontent.com/{github_repo()}/{branch}"
+    return f"{base}/out/infographics/{filename}"
+
+
+def notion_headers(token: str) -> dict:
+    return {
         "Authorization": f"Bearer {token}",
         "Notion-Version": NOTION_VERSION,
         "Content-Type": "application/json",
     }
+
+
+def query_approved_without_image(token: str, database_id: str) -> list[dict]:
     payload = {
         "filter": {
             "and": [
@@ -85,7 +131,7 @@ def query_approved_without_image(token: str, database_id: str) -> list[dict]:
             body["start_cursor"] = cursor
         r = requests.post(
             f"{NOTION_API}/databases/{database_id}/query",
-            headers=headers,
+            headers=notion_headers(token),
             json=body,
             timeout=30,
         )
@@ -96,6 +142,25 @@ def query_approved_without_image(token: str, database_id: str) -> list[dict]:
             break
         cursor = data.get("next_cursor")
     return pages
+
+
+def set_notion_image(token: str, page_id: str, url: str) -> None:
+    name = url.rsplit("/", 1)[-1]
+    r = requests.patch(
+        f"{NOTION_API}/pages/{page_id}",
+        headers=notion_headers(token),
+        json={
+            "properties": {
+                "Image": {
+                    "files": [
+                        {"type": "external", "name": name, "external": {"url": url}}
+                    ]
+                }
+            }
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
 
 
 def plain_text(rich_text: Iterable[dict]) -> str:
@@ -153,7 +218,6 @@ def render(post: dict) -> Path:
     theme_color = THEME_COLOR.get(post["theme"], ROIMA_GREEN)
     content_max_w = CANVAS - 2 * MARGIN
 
-    # Theme pill (top left)
     pill_text = (post["theme"] or "").upper()
     if pill_text:
         pill_f = font(24, bold=True)
@@ -214,7 +278,22 @@ def render(post: dict) -> Path:
     return out_path
 
 
+def commit_and_push(paths: list[Path]) -> bool:
+    if not paths:
+        return True
+    try:
+        git("add", *[str(p) for p in paths])
+        msg = f"Add {len(paths)} infographic{'s' if len(paths) != 1 else ''}"
+        git("commit", "-m", msg)
+        git("push", "origin", "HEAD")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  git step failed: {e}", file=sys.stderr)
+        return False
+
+
 def main() -> int:
+    load_dotenv()
     token = os.environ.get("NOTION_KEY") or os.environ.get("NOTION_TOKEN")
     if not token:
         print(
@@ -222,7 +301,7 @@ def main() -> int:
             "  1. Create an internal integration: "
             "https://www.notion.so/profile/integrations\n"
             "  2. Share the LinkedIn Content Calendar > Posts database with it.\n"
-            "  3. export NOTION_KEY=<secret>",
+            "  3. export NOTION_KEY=<secret>  (or put it in .env)",
             file=sys.stderr,
         )
         return 2
@@ -233,12 +312,24 @@ def main() -> int:
         print("No approved posts without an image. Nothing to do.")
         return 0
 
+    rendered: list[tuple[dict, Path]] = []
     for page in pages:
         post = post_from_page(page)
         path = render(post)
+        rendered.append((post, path))
         print(f"  rendered {path.relative_to(ROOT)}  ({post['theme']})")
 
-    print(f"\n{len(pages)} rendered")
+    if os.environ.get("SKIP_GIT") != "1":
+        if not commit_and_push([p for _, p in rendered]):
+            print("aborting Notion update because git push failed", file=sys.stderr)
+            return 1
+
+    for post, path in rendered:
+        url = raw_url_for(path.name)
+        set_notion_image(token, post["id"], url)
+        print(f"  updated Notion {post['title']} -> {url}")
+
+    print(f"\n{len(rendered)} rendered and synced to Notion")
     return 0
 
 
