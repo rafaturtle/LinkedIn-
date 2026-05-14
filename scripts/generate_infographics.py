@@ -1,27 +1,29 @@
-"""Generate LinkedIn-post infographics for Notion pages that are approved
-and have no Image yet, then commit, push, and update Notion's Image
-field with the public raw GitHub URL.
+"""Generate LinkedIn-post infographics for Notion posts.
 
-Notion is the source of truth: the script queries the Posts database for
-rows where ``Status == "Approved"`` and the ``Image`` file property is
-empty, renders a 1080x1080 PNG per qualifying row into
-``out/infographics/``, commits and pushes the new files, and finally
-PATCHes each page so its ``Image`` field points at the new raw URL.
+Notion is the source of truth: the script queries the Posts database,
+renders a 1080x1080 PNG per qualifying row into ``out/infographics/``,
+commits and pushes the new files, and finally PATCHes each page so its
+``Image`` field points at the new raw URL.
+
+Default filter is ``Status == "Approved"`` AND ``Image is empty``.
+Pass ``--all`` to regenerate every post regardless of status/image.
+
+Background photos come from Pixabay (one per Theme), are cached at
+``assets/backgrounds/<theme-slug>.jpg`` and committed alongside the
+infographics so re-runs are deterministic.
 
 Required env (or in a project-local .env file):
-    NOTION_KEY (or NOTION_TOKEN) — internal integration token with read
-        + update access to the Posts database.
+    NOTION_KEY (or NOTION_TOKEN)
+    PIXABAY_KEY (or PIXABAY_API_KEY)
 
 Optional env:
-    NOTION_POSTS_DATABASE_ID — defaults to the LinkedIn Content
-        Calendar's Posts database.
-    GITHUB_RAW_BASE — override the raw-content base URL. Defaults to
-        the current branch on origin.
-    SKIP_GIT — set to "1" to skip git add/commit/push (just generate
-        and update Notion).
+    NOTION_POSTS_DATABASE_ID
+    GITHUB_RAW_BASE
+    SKIP_GIT — set to "1" to skip git add/commit/push.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import subprocess
@@ -30,22 +32,27 @@ from pathlib import Path
 from typing import Iterable
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "out" / "infographics"
+BG_DIR = ROOT / "assets" / "backgrounds"
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 DEFAULT_DATABASE_ID = "467cca82-320c-4d30-9393-2dfba0629d01"
 
+PIXABAY_API = "https://pixabay.com/api/"
+
 CANVAS = 1080
 MARGIN = 80
+OVERLAY_ALPHA = 180  # 0-255, applied as solid black on top of the photo
 
 ROIMA_GREEN = "#46B03B"
 GRAY_900 = "#212121"
 GRAY_600 = "#757575"
 WHITE = "#FFFFFF"
+LIGHT_GRAY = "#DDDDDD"
 
 THEME_COLOR = {
     "Diagnosis": "#b05f2a",
@@ -56,6 +63,17 @@ THEME_COLOR = {
     "SME myth": "#b05f2a",
     "Quality": "#337A99",
     "OEE rethink": "#3A7152",
+}
+
+THEME_QUERY = {
+    "Diagnosis": "manufacturing inspection",
+    "Data byproduct": "factory dashboard",
+    "OEE plateau": "factory production line",
+    "Orchestration": "factory automation",
+    "Workforce": "factory worker",
+    "SME myth": "small factory",
+    "Quality": "wine production",
+    "OEE rethink": "factory machinery",
 }
 
 FONT_REGULAR = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
@@ -114,19 +132,12 @@ def notion_headers(token: str) -> dict:
     }
 
 
-def query_approved_without_image(token: str, database_id: str) -> list[dict]:
-    payload = {
-        "filter": {
-            "and": [
-                {"property": "Status", "status": {"equals": "Approved"}},
-                {"property": "Image", "files": {"is_empty": True}},
-            ]
-        }
-    }
+def query_pages(token: str, database_id: str,
+                payload: dict | None = None) -> list[dict]:
     pages: list[dict] = []
     cursor: str | None = None
     while True:
-        body = dict(payload)
+        body = dict(payload or {})
         if cursor:
             body["start_cursor"] = cursor
         r = requests.post(
@@ -142,6 +153,17 @@ def query_approved_without_image(token: str, database_id: str) -> list[dict]:
             break
         cursor = data.get("next_cursor")
     return pages
+
+
+def query_approved_without_image(token: str, database_id: str) -> list[dict]:
+    return query_pages(token, database_id, {
+        "filter": {
+            "and": [
+                {"property": "Status", "status": {"equals": "Approved"}},
+                {"property": "Image", "files": {"is_empty": True}},
+            ]
+        }
+    })
 
 
 def set_notion_image(token: str, page_id: str, url: str) -> None:
@@ -193,6 +215,45 @@ def post_from_page(page: dict) -> dict:
     }
 
 
+def fetch_background(theme: str, key: str) -> Path | None:
+    if not theme:
+        return None
+    BG_DIR.mkdir(parents=True, exist_ok=True)
+    cache = BG_DIR / f"{slug(theme)}.jpg"
+    if cache.exists():
+        return cache
+    query = THEME_QUERY.get(theme, theme)
+    try:
+        r = requests.get(
+            PIXABAY_API,
+            params={
+                "key": key,
+                "q": query,
+                "image_type": "photo",
+                "orientation": "horizontal",
+                "min_width": 1280,
+                "safesearch": "true",
+                "per_page": 5,
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        hits = r.json().get("hits", [])
+        if not hits:
+            print(f"  pixabay: no hits for {query!r}", file=sys.stderr)
+            return None
+        url = hits[0].get("largeImageURL") or hits[0].get("webformatURL")
+        if not url:
+            return None
+        img_r = requests.get(url, timeout=30)
+        img_r.raise_for_status()
+        cache.write_bytes(img_r.content)
+        return cache
+    except requests.RequestException as e:
+        print(f"  pixabay error: {e}", file=sys.stderr)
+        return None
+
+
 def wrap_text(draw: ImageDraw.ImageDraw, text: str, f: ImageFont.FreeTypeFont,
               max_width: int) -> list[str]:
     lines: list[str] = []
@@ -211,10 +272,22 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, f: ImageFont.FreeTypeFont,
     return lines
 
 
-def render(post: dict) -> Path:
-    img = Image.new("RGB", (CANVAS, CANVAS), WHITE)
-    draw = ImageDraw.Draw(img)
+def render(post: dict, pixabay_key: str | None) -> Path:
+    bg_path = fetch_background(post["theme"], pixabay_key) if pixabay_key else None
 
+    if bg_path:
+        bg = Image.open(bg_path).convert("RGB")
+        bg = ImageOps.fit(bg, (CANVAS, CANVAS), method=Image.LANCZOS)
+        overlay = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, OVERLAY_ALPHA))
+        img = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+        top_color = LIGHT_GRAY
+        bottom_color = WHITE
+    else:
+        img = Image.new("RGB", (CANVAS, CANVAS), WHITE)
+        top_color = GRAY_600
+        bottom_color = GRAY_900
+
+    draw = ImageDraw.Draw(img)
     theme_color = THEME_COLOR.get(post["theme"], ROIMA_GREEN)
     content_max_w = CANVAS - 2 * MARGIN
 
@@ -260,7 +333,7 @@ def render(post: dict) -> Path:
     y = (CANVAS - block_h) // 2
 
     for line in top_lines:
-        draw.text((MARGIN, y), line, fill=GRAY_600, font=top_f)
+        draw.text((MARGIN, y), line, fill=top_color, font=top_f)
         y += top_lh
 
     if top_lines:
@@ -269,7 +342,7 @@ def render(post: dict) -> Path:
         y += gap
 
     for line in bottom_lines:
-        draw.text((MARGIN, y), line, fill=GRAY_900, font=bottom_f)
+        draw.text((MARGIN, y), line, fill=bottom_color, font=bottom_f)
         y += bottom_lh
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -283,7 +356,10 @@ def commit_and_push(paths: list[Path]) -> bool:
         return True
     try:
         git("add", *[str(p) for p in paths])
-        msg = f"Add {len(paths)} infographic{'s' if len(paths) != 1 else ''}"
+        diff = git("diff", "--cached", "--name-only")
+        if not diff:
+            return True
+        msg = f"Update {len(paths)} infographic{'s' if len(paths) != 1 else ''}"
         git("commit", "-m", msg)
         git("push", "origin", "HEAD")
         return True
@@ -294,6 +370,14 @@ def commit_and_push(paths: list[Path]) -> bool:
 
 def main() -> int:
     load_dotenv()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Regenerate every post (ignore Status/Image filter).",
+    )
+    args = parser.parse_args()
+
     token = os.environ.get("NOTION_KEY") or os.environ.get("NOTION_TOKEN")
     if not token:
         print(
@@ -306,21 +390,34 @@ def main() -> int:
         )
         return 2
 
+    pixabay_key = (
+        os.environ.get("PIXABAY_KEY") or os.environ.get("PIXABAY_API_KEY")
+    )
+    if not pixabay_key:
+        print("warning: PIXABAY_KEY not set — using white background.", file=sys.stderr)
+
     database_id = os.environ.get("NOTION_POSTS_DATABASE_ID", DEFAULT_DATABASE_ID)
-    pages = query_approved_without_image(token, database_id)
+    if args.all:
+        pages = query_pages(token, database_id)
+        print(f"--all: regenerating {len(pages)} posts")
+    else:
+        pages = query_approved_without_image(token, database_id)
+
     if not pages:
-        print("No approved posts without an image. Nothing to do.")
+        print("No qualifying posts. Nothing to do.")
         return 0
 
     rendered: list[tuple[dict, Path]] = []
     for page in pages:
         post = post_from_page(page)
-        path = render(post)
+        path = render(post, pixabay_key)
         rendered.append((post, path))
         print(f"  rendered {path.relative_to(ROOT)}  ({post['theme']})")
 
     if os.environ.get("SKIP_GIT") != "1":
-        if not commit_and_push([p for _, p in rendered]):
+        png_paths = [p for _, p in rendered]
+        bg_paths = list(BG_DIR.glob("*.jpg")) if BG_DIR.exists() else []
+        if not commit_and_push(png_paths + bg_paths):
             print("aborting Notion update because git push failed", file=sys.stderr)
             return 1
 
