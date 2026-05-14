@@ -139,11 +139,26 @@ def render(post: dict) -> Path:
     return out_path
 
 
+def should_generate(post: dict) -> bool:
+    return post.get("status") == "Approved" and not post.get("has_image", False)
+
+
 def main() -> None:
     posts = json.loads(DATA_FILE.read_text())
+    rendered = skipped = 0
     for post in posts:
+        if not should_generate(post):
+            reason = (
+                "has image" if post.get("has_image")
+                else f"status={post.get('status')!r}"
+            )
+            print(f"  skip {post['title']} ({reason})")
+            skipped += 1
+            continue
         path = render(post)
-        print(f"  -> {path.relative_to(ROOT)}")
+        print(f"  rendered {path.relative_to(ROOT)}")
+        rendered += 1
+    print(f"\n{rendered} rendered, {skipped} skipped")
 
 
 if __name__ == "__main__":
