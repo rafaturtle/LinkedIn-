@@ -66,14 +66,14 @@ THEME_COLOR = {
 }
 
 THEME_QUERY = {
-    "Diagnosis": "manufacturing inspection",
-    "Data byproduct": "factory dashboard",
-    "OEE plateau": "factory production line",
-    "Orchestration": "factory automation",
-    "Workforce": "factory worker",
-    "SME myth": "small factory",
-    "Quality": "wine production",
-    "OEE rethink": "factory machinery",
+    "Diagnosis": "beverage bottling factory inspection",
+    "Data byproduct": "beverage bottling line dashboard",
+    "OEE plateau": "beverage bottling line automation",
+    "Orchestration": "beverage industrial factory automation",
+    "Workforce": "beverage bottling factory worker",
+    "SME myth": "small beverage bottling factory",
+    "Quality": "beverage bottling quality control",
+    "OEE rethink": "beverage bottling line machinery",
 }
 
 FONT_REGULAR = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
